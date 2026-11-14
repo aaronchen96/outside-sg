@@ -1,6 +1,8 @@
 **/node_modules/
 **/bin/
 **/obj/
+**/TestResults/
+**/coverage/
 server/App_Data/
 server/data/
 client/dist/

@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace Outside.Api;
 
-public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherService> logger)
+public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherService> logger, TimeProvider clock)
 {
     private sealed record Cached(JsonElement Data, DateTimeOffset FetchedAt, DateTimeOffset? UpdatedAt, bool Failed);
     private readonly Dictionary<string, Cached> cache = new();
@@ -17,12 +17,12 @@ public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherSe
 
     private async Task Refresh(CancellationToken cancellationToken)
     {
-        if (DateTimeOffset.UtcNow < nextRefresh)
+        if (clock.GetUtcNow() < nextRefresh)
             return;
         await refreshLock.WaitAsync(cancellationToken);
         try
         {
-            if (DateTimeOffset.UtcNow < nextRefresh)
+            if (clock.GetUtcNow() < nextRefresh)
                 return;
             var tasks = Endpoints.Select(async endpoint =>
             {
@@ -45,7 +45,7 @@ public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherSe
                     if (record is null)
                         throw new JsonException("No records in upstream response.");
                     Validate(endpoint.Path, data, record.Value);
-                    return (endpoint.Path, Result: (Cached?)new Cached(data, DateTimeOffset.UtcNow, T(S(record.Value, "timestamp")), false));
+                    return (endpoint.Path, Result: (Cached?)new Cached(data, clock.GetUtcNow(), T(S(record.Value, "timestamp")), false));
                 }
                 catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException or KeyNotFoundException or InvalidOperationException or FormatException)
                 {
@@ -63,7 +63,7 @@ public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherSe
                         Failed = true
                     };
             }
-            nextRefresh = DateTimeOffset.UtcNow.AddMinutes(5);
+            nextRefresh = clock.GetUtcNow().AddMinutes(5);
         }
         finally { refreshLock.Release(); }
     }
@@ -98,7 +98,7 @@ public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherSe
         await refreshLock.WaitAsync(cancellationToken);
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = clock.GetUtcNow();
             var sources = Endpoints.Select(e => new Source(e.Name, $"https://api-open.data.gov.sg/v2/real-time/api/{e.Path}", SourceStatus(e.Path, now), cache.GetValueOrDefault(e.Path)?.UpdatedAt?.ToString("O"))).ToArray();
             var status = sources.All(x => x.Status == "live") ? "live" : sources.All(x => x.Status == "unavailable") ? "unavailable" : "stale";
             var two = cache.TryGetValue("two-hr-forecast", out var twoCache) ? Latest(twoCache.Data, "items", "timestamp") : null;
@@ -161,7 +161,7 @@ public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherSe
         var nearest = stations[0];
         return new(values[S(nearest.Station, "id")!], unit, S(nearest.Station, "name") ?? "Unknown station", Math.Round(nearest.Distance, 1), S(reading, "timestamp") ?? "");
     }
-    private static (int? Score, string Verdict, string[] Reasons) Score(string? forecast, Observation? rain, Observation? temperature, Observation? humidity, string activity, bool fresh)
+    private (int? Score, string Verdict, string[] Reasons) Score(string? forecast, Observation? rain, Observation? temperature, Observation? humidity, string activity, bool fresh)
     {
         if (!fresh || forecast is null || rain is null || temperature is null)
             return (null, "Awaiting current data", ["A current area forecast, rainfall reading and temperature reading are required for a recommendation."]);
@@ -204,7 +204,7 @@ public sealed class WeatherService(IHttpClientFactory factory, ILogger<WeatherSe
             score -= 5;
             reasons.Add("Nearby temperature is at least 30°C; bring water.");
         }
-        if (humidity is not null && T(humidity.Timestamp) is { } humidityTime && humidityTime <= DateTimeOffset.UtcNow.AddMinutes(5) && DateTimeOffset.UtcNow - humidityTime <= TimeSpan.FromMinutes(30) && humidity.Value >= 85)
+        if (humidity is not null && T(humidity.Timestamp) is { } humidityTime && humidityTime <= clock.GetUtcNow().AddMinutes(5) && clock.GetUtcNow() - humidityTime <= TimeSpan.FromMinutes(30) && humidity.Value >= 85)
         {
             score -= 5;
             reasons.Add("Nearby humidity is at least 85%, which may feel less comfortable.");

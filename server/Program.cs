@@ -9,6 +9,7 @@ if (string.IsNullOrEmpty(builder.Configuration["urls"]))
     builder.WebHost.UseUrls("http://localhost:5100");
 
 builder.Services.AddSingleton<WeatherService>();
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddHttpClient("weather", client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Weather:BaseUrl"] ?? "https://api-open.data.gov.sg/v2/real-time/api/");
@@ -90,3 +91,5 @@ else
 app.Run();
 
 static IResult Error(int status, string title, string detail) => Results.Json(new { title, detail, status }, statusCode: status);
+
+public partial class Program;
